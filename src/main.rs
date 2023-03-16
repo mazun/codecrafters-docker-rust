@@ -1,4 +1,10 @@
 use anyhow::{Context, Result};
+use std::os::unix::fs::chroot;
+use std::{
+    env,
+    fs::{self},
+};
+use tempfile::TempDir;
 
 // Usage: your_docker.sh run <image> <command> <arg1> <arg2> ...
 fn main() -> Result<()> {
@@ -8,7 +14,25 @@ fn main() -> Result<()> {
     let args: Vec<_> = std::env::args().collect();
     let command = &args[3];
     let command_args = &args[4..];
-    let output = std::process::Command::new(command)
+
+    let tmp_dir = TempDir::new()?;
+    let new_command = tmp_dir.path().join(command.trim_start_matches('/'));
+    fs::create_dir_all(new_command.parent().unwrap())?;
+    fs::copy(command, new_command)?;
+
+    chroot(tmp_dir.path())?;
+    env::set_current_dir("/")?;
+
+    fs::create_dir_all("/dev")?;
+    fs::File::create("/dev/null")?;
+
+    // Somehow, this doesn't work with my docker environment but does with the codecrafters' :).
+    // Guess this is related to the .so files used from the binaries like `ls`, but not sure...
+    // Another fact is that codecrafters's tests pass even without the preceeding "/". So
+    // guess the binary with everything statistically linked is located on the directory the tests run.
+    let output = std::process::Command::new("/".to_owned() + command.trim_start_matches('/'))
+        .stdout(std::process::Stdio::inherit())
+        .stderr(std::process::Stdio::inherit())
         .args(command_args)
         .output()
         .with_context(|| {
