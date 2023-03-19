@@ -1,9 +1,6 @@
 use anyhow::{Context, Result};
-use std::os::unix::fs::chroot;
-use std::{
-    env,
-    fs::{self},
-};
+use libc::{strerror, unshare, CLONE_NEWNS, CLONE_NEWPID};
+use std::{env, ffi::CStr, fs, os::unix::fs::chroot};
 use tempfile::TempDir;
 
 // Usage: your_docker.sh run <image> <command> <arg1> <arg2> ...
@@ -14,6 +11,15 @@ fn main() -> Result<()> {
     let args: Vec<_> = std::env::args().collect();
     let command = &args[3];
     let command_args = &args[4..];
+
+    unsafe {
+        let flags = CLONE_NEWPID | CLONE_NEWNS;
+        if unshare(flags) != 0 {
+            let err = *libc::__errno_location();
+            let err_str = CStr::from_ptr(strerror(err));
+            eprintln!("Failed to call unshare: {}", err_str.to_string_lossy());
+        }
+    }
 
     let tmp_dir = TempDir::new()?;
     let new_command = tmp_dir.path().join(command.trim_start_matches('/'));
