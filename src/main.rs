@@ -3,6 +3,21 @@ use libc::{strerror, unshare, CLONE_NEWNS, CLONE_NEWPID};
 use std::{env, ffi::CStr, fs, os::unix::fs::chroot};
 use tempfile::TempDir;
 
+fn check_libc_return_code(libc_func: fn() -> i32) -> Result<()> {
+    if libc_func() != 0 {
+        unsafe {
+            let err = *libc::__errno_location();
+            let err_str = CStr::from_ptr(strerror(err));
+            Err(anyhow::anyhow!(
+                "Failed to call unshare: {}",
+                err_str.to_string_lossy()
+            ))
+        }
+    } else {
+        Ok(())
+    }
+}
+
 // Usage: your_docker.sh run <image> <command> <arg1> <arg2> ...
 fn main() -> Result<()> {
     // You can use print statements as follows for debugging, they'll be visible when running tests.
@@ -12,14 +27,10 @@ fn main() -> Result<()> {
     let command = &args[3];
     let command_args = &args[4..];
 
-    unsafe {
+    check_libc_return_code(|| {
         let flags = CLONE_NEWPID | CLONE_NEWNS;
-        if unshare(flags) != 0 {
-            let err = *libc::__errno_location();
-            let err_str = CStr::from_ptr(strerror(err));
-            eprintln!("Failed to call unshare: {}", err_str.to_string_lossy());
-        }
-    }
+        unsafe { unshare(flags) }
+    })?;
 
     let tmp_dir = TempDir::new()?;
     let new_command = tmp_dir.path().join(command.trim_start_matches('/'));
