@@ -3,6 +3,9 @@ use libc::{strerror, unshare, CLONE_NEWNS, CLONE_NEWPID};
 use std::{env, ffi::CStr, fs, os::unix::fs::chroot};
 use tempfile::TempDir;
 
+mod docker_api;
+use docker_api::DockerAPI;
+
 fn check_libc_return_code(libc_func: fn() -> i32) -> Result<()> {
     if libc_func() != 0 {
         unsafe {
@@ -19,23 +22,32 @@ fn check_libc_return_code(libc_func: fn() -> i32) -> Result<()> {
 }
 
 // Usage: your_docker.sh run <image> <command> <arg1> <arg2> ...
-fn main() -> Result<()> {
+#[tokio::main]
+async fn main() -> Result<()> {
     // You can use print statements as follows for debugging, they'll be visible when running tests.
     // println!("Logs from your program will appear here!");
 
     let args: Vec<_> = std::env::args().collect();
+    if args.len() < 4 {
+        return Ok(());
+    }
+
+    let name_reference = &args[2];
+    // eprintln!("{}", name_reference);
+    let name_reference: Vec<&str> = name_reference.split(":").collect();
+    let name = name_reference[0];
+    let reference = *name_reference.get(1).unwrap_or(&"latest");
     let command = &args[3];
     let command_args = &args[4..];
+
+    let docker_api = DockerAPI::new();
+    let tmp_dir = TempDir::new()?;
+    docker_api.pull(name, reference, tmp_dir.path()).await?;
 
     check_libc_return_code(|| {
         let flags = CLONE_NEWPID | CLONE_NEWNS;
         unsafe { unshare(flags) }
     })?;
-
-    let tmp_dir = TempDir::new()?;
-    let new_command = tmp_dir.path().join(command.trim_start_matches('/'));
-    fs::create_dir_all(new_command.parent().unwrap())?;
-    fs::copy(command, new_command)?;
 
     chroot(tmp_dir.path())?;
     env::set_current_dir("/")?;
@@ -43,11 +55,7 @@ fn main() -> Result<()> {
     fs::create_dir_all("/dev")?;
     fs::File::create("/dev/null")?;
 
-    // Somehow, this doesn't work with my docker environment but does with the codecrafters' :).
-    // Guess this is related to the .so files used from the binaries like `ls`, but not sure...
-    // Another fact is that codecrafters's tests pass even without the preceeding "/". So
-    // guess the binary with everything statistically linked is located on the directory the tests run.
-    let output = std::process::Command::new("/".to_owned() + command.trim_start_matches('/'))
+    let output = std::process::Command::new(command)
         .stdout(std::process::Stdio::inherit())
         .stderr(std::process::Stdio::inherit())
         .args(command_args)
